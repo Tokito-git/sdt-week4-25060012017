@@ -1,0 +1,819 @@
+\documentclass[UTF8,12pt,a4paper]{ctexart}
+
+\usepackage[left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{array}
+\emergencystretch=1.5em
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue
+}
+
+\pagestyle{fancy}
+\setlength{\headheight}{14.5pt}
+\fancyhf{}
+\lhead{系统开发工具基础}
+\rhead{第四周实验报告}
+\cfoot{\thepage}
+
+\lstdefinelanguage{yaml}{
+    morestring=[b]",
+    morecomment=[l]{\#},
+    keywords={name,on,jobs,runs-on,steps,uses,with,run,repos,repo,rev,hooks,id}
+}
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    columns=fullflexible,
+    showstringspaces=false,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!50!black},
+    captionpos=b
+}
+
+\newcommand{\expimage}[3]{
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=0.90\textwidth]{#1}
+        \caption{#2}
+        \label{#3}
+    \end{figure}
+}
+
+\title{系统开发工具基础\\第四周实验报告}
+\author{姓名：林子钰 \\ 学号：25060012017 \\ 班级：计算机类1班}
+\date{2026年9月16日}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{实验概述}
+
+第四周实验围绕代码质量门禁、构建系统、API 数据处理、综合仓库修复，以及课后工程化练习展开。本周课堂实验对应课程第 13 题至第 16 题，分别完成 \texttt{ruff} 与 \texttt{pytest} 质量检查、只重建受影响产物的 Makefile、使用 \texttt{curl} 和 \texttt{jq} 生成 Markdown 报告，以及在陌生小型仓库中完成失败复现、修复、构建、哈希校验和 Git 提交。
+
+在 Q13 中，报告复用了 \texttt{greetlab} 包并建立本地质量门禁。项目同时检查格式、静态分析和自动化测试，最终由 \texttt{check.sh} 统一执行。该实验说明质量工具不能只“安装成功”，还必须被组合成可重复、可返回明确退出码的检查流程。
+
+在 Q14 中，Makefile 根据源文件、脚本和生成物之间的时间戳关系决定是否重新执行配方。第一次 \texttt{make} 生成结果，第二次 \texttt{make} 不执行任何配方，修改 \texttt{data.csv} 后才重新生成中间文件与最终报告，体现了声明式构建系统对增量构建的支持。
+
+在 Q15 中，本地 HTTP 服务把 \texttt{packages.json} 暴露为 API，\texttt{curl} 负责可靠获取数据，\texttt{jq} 负责筛选、排序和生成三列表格，最终写入 \texttt{summary.md}。该过程体现了 Unix 工具通过标准输入输出组合完成数据处理的能力。
+
+在 Q16 中，先故意破坏问候语并确认测试能够捕获错误，再修复实现并补齐 Makefile、Wheel 构建、SHA-256 校验和 Git 提交。和单纯的“把代码改对”相比，本实验更强调修复后仍要重新运行完整检查，并保留可审计的构建和提交证据。
+
+课后练习还覆盖了 pre-commit、单元测试与覆盖率、CI、\texttt{grep}/\texttt{semgrep}、正则查找替换以及 JSON 解析。对于未保存 AI agent 截图的环节，本报告直接保留提示词、执行命令、关键输出和结论，使 AI 参与过程仍可审查、可复现。
+
+\section{实验环境}
+
+\begin{table}[H]
+    \centering
+    \caption{实验环境}
+    \label{tab:environment}
+    \begin{tabular}{ll}
+        \toprule
+        项目 & 配置 \\
+        \midrule
+        操作系统 & Ubuntu 24.04.4 \\
+        Shell & Bash \\
+        Python 版本 & Python 3.10.12 \\
+        质量检查工具 & Ruff、pytest 9.1.1 \\
+        覆盖率工具 & coverage.py 7.1.0 \\
+        构建工具 & GNU Make、Python build 1.2.0、setuptools 26.3 \\
+        API 工具 & curl、jq 1.6、Python http.server \\
+        版本控制 & Git \\
+        编辑器 & GNU nano \\
+        semgrep 状态 & 当前虚拟环境中未安装，命令返回 No such file or directory \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{课堂实验}
+
+\subsection{实验十三：建立可执行的本地质量门禁}
+
+\subsubsection{实验目的}
+
+\begin{enumerate}[label=\arabic*.]
+    \item 复用 Q10 的 \texttt{greetlab} 项目并加入最小质量工具配置。
+    \item 为正常姓名和空白姓名分别编写带有效断言的测试。
+    \item 使用 \texttt{ruff format}、\texttt{ruff check} 和 \texttt{pytest} 修复全部问题。
+    \item 编写统一的 \texttt{check.sh}，保证全部检查通过时返回 0。
+    \item 通过多次提交保留配置、测试和质量脚本的演进过程。
+\end{enumerate}
+
+\subsubsection{项目配置与测试}
+
+在 \texttt{pyproject.toml} 中加入 Ruff 与 pytest 的最小配置：
+
+\begin{lstlisting}[language=Python]
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+\end{lstlisting}
+
+测试同时覆盖正常输入和空白输入。空白姓名应当被拒绝，并产生非零退出状态；正常姓名则应在标准输出中得到完整问候语。
+
+\begin{lstlisting}[language=Python]
+import sys
+import pytest
+from greetlab.cli import main
+
+
+def test_normal_name_prints_greeting(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["sdt-greet", "--name", "Alice"])
+    main()
+    captured = capsys.readouterr()
+    assert captured.out == "Hello, Alice!\n"
+
+
+def test_blank_name_exits_with_code_2(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["sdt-greet", "--name", "   "])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 2
+\end{lstlisting}
+
+质量门禁脚本按照题目要求的顺序执行检查：
+
+\begin{lstlisting}[language=bash]
+#!/usr/bin/env bash
+set -euo pipefail
+
+ruff format --check
+ruff check
+python -m pytest
+\end{lstlisting}
+
+首次安装依赖时，项目使用 \texttt{python -m pip install -e ".[dev]"}。实验中也观察到仅有旧版 setuptools 时无法提供 PEP 660 可编辑安装能力，因此需要在新的虚拟环境中补齐构建后端与开发依赖。配置完成后，Ruff 可统一格式化代码，pytest 正常收集两个测试。
+
+\expimage{../q13/q13-pro2-git_commit_history.png}{Q13 的 pyproject.toml、开发依赖安装与测试配置}{fig:q13-config}
+
+\subsubsection{质量问题修复}
+
+第一次运行 \texttt{ruff format} 时，Q10 复制过来的源码和测试共有 4 个文件需要重新格式化。执行 \texttt{ruff check --fix} 后，剩余的测试导入顺序问题也被修复。全过程没有在配置中全局忽略规则，而是直接修正源码与测试。
+
+\begin{lstlisting}[language=bash]
+$ ruff format
+4 files reformatted, 4 files left unchanged
+
+$ ruff check --fix
+All checks passed!
+
+$ ruff format --check
+8 files already formatted
+
+$ python -m pytest
+collected 2 items
+tests/test_cli.py ..                                      [100%]
+2 passed in 0.08s
+\end{lstlisting}
+
+\expimage{../q13/q13-pro5-format_and_test.png}{Q13 中 Ruff 格式化、pytest 运行与两测试通过结果}{fig:q13-format-test}
+
+修复过程中还发现 \texttt{check.sh} 直接调用 \texttt{pytest} 时可能受当前 shell 的 PATH 影响，最终改为显式使用 \texttt{python -m pytest}，从而保证虚拟环境中的解释器和测试模块能够被稳定定位。
+
+\expimage{../q13/q13-pro4-fix_quality_checks.png}{Q13 修复 Ruff 问题并验证 pytest、check.sh 退出行为}{fig:q13-fix}
+
+\subsubsection{实验结果}
+
+最终执行 \texttt{./check.sh} 时，格式检查显示 8 个文件已经格式化，Ruff 显示所有检查通过，pytest 收集并通过 2 个测试。随后执行 \texttt{echo \$?} 得到退出码 0，满足本地质量门禁要求。
+
+\expimage{../q13/q13-result.png}{Q13 最终 check.sh 通过、2 个测试通过且退出码为 0}{fig:q13-result}
+
+Git 历史中可分为配置、测试和质量脚本三类提交，提交编号分别包含 \texttt{07cc159}、\texttt{ecbf6c4} 和 \texttt{d2bc8d3}。这种拆分方式比把全部改动压成一个模糊提交更容易审查。
+
+\expimage{../q13/q13-pro1-run_check_and_tests.png}{Q13 分阶段 Git 提交与提交历史}{fig:q13-git}
+
+\subsubsection{问题分析与体会}
+
+本实验最值得注意的问题是“单独运行成功”不等于“门禁脚本成功”。工具是否位于当前解释器、脚本是否设置了 \texttt{set -euo pipefail}、工作目录是否一致，都会影响最终退出码。使用 \texttt{python -m pytest} 和 \texttt{python -m ruff} 比依赖 PATH 中的裸命令更稳定。质量门禁的价值在于把多个手工判断转换为一条可重复执行的命令，使 CI 和本地开发能够使用同一套标准。
+
+\subsection{实验十四：让 Make 只重建真正受影响的产物}
+
+\subsubsection{实验目的}
+
+\begin{enumerate}[label=\arabic*.]
+    \item 理解 Make 的目标、依赖和配方三个基本组成部分。
+    \item 根据文件的实际依赖关系描述增量构建规则。
+    \item 验证无改动时 Make 不重复执行配方。
+    \item 在输入变化后只重建受影响的中间产物和最终产物。
+    \item 使用 \texttt{clean} 删除生成物但保留源文件。
+\end{enumerate}
+
+\subsubsection{源文件与 Makefile}
+
+按照题目给定内容创建 \texttt{data.csv}、\texttt{stats.py}、\texttt{build\_report.py} 和 \texttt{report.md}。数据总和为 \(2+3+5=10\)。Makefile 的核心内容如下：
+
+\begin{lstlisting}[language=make]
+.PHONY: all clean
+
+all: report.txt
+
+stats.txt: data.csv stats.py
+	python3 stats.py
+
+report.txt: report.md build_report.py stats.txt
+	python3 build_report.py
+
+clean:
+	rm -f stats.txt report.txt
+\end{lstlisting}
+
+其中 \texttt{stats.txt} 同时依赖数据文件和统计脚本；\texttt{report.txt} 同时依赖 Markdown 模板、报告生成脚本和已经生成的 \texttt{stats.txt}。只要依赖文件比目标文件更新，Make 就会重新执行对应配方；否则输出“Nothing to be done”。
+
+\expimage{../q14/q14-pro1-create_data_and_scripts.png}{Q14 创建给定数据、统计脚本、报告脚本与 Markdown 源文件}{fig:q14-source}
+
+\subsubsection{增量构建验证}
+
+首次运行 \texttt{make} 时依次执行 \texttt{python3 stats.py} 和 \texttt{python3 build\_report.py}，生成 \texttt{stats.txt} 与 \texttt{report.txt}。立即再次运行 \texttt{make} 时，两个目标都早于依赖，因此没有执行任何脚本。
+
+随后执行 \texttt{touch data.csv} 改变数据文件的修改时间，再次运行 \texttt{make} 时两个配方都重新执行。这说明 \texttt{stats.txt} 已正确声明对 \texttt{data.csv} 的依赖，而变化又会继续传递到最终报告。运行 \texttt{make clean} 后，两个生成物被删除，四个源文件仍然保留。
+
+\begin{lstlisting}[language=bash]
+$ make
+python3 stats.py
+python3 build_report.py
+
+$ cat stats.txt
+10
+
+$ cat report.txt
+# Data Report
+Total: 10
+
+$ make
+make: Nothing to be done for 'all'.
+
+$ touch data.csv
+$ make
+python3 stats.py
+python3 build_report.py
+
+$ make clean
+rm -f stats.txt report.txt
+\end{lstlisting}
+
+\expimage{../q14/q14-pro2-make_build_and_clean.png}{Q14 首次构建、无改动跳过、touch 后重建与 clean 验证}{fig:q14-make}
+
+\subsubsection{实验结果与提交记录}
+
+清理后从零运行 \texttt{make} 可再次生成 \texttt{stats.txt} 和 \texttt{report.txt}，内容分别为 \texttt{10} 与包含 \texttt{Total: 10} 的 Markdown 报告。随后再次运行 \texttt{make} 不再执行配方。实验最终将 5 个源文件提交为 \texttt{1f95941}，提交信息为 \texttt{feat(q14): add make build pipeline}。
+
+\expimage{../q14/q14-pro3-git_init_and_commit.png}{Q14 初始化 Git、添加源文件并完成聚焦提交}{fig:q14-git}
+
+\expimage{../q14/q14-result.png}{Q14 最终产物、增量构建与 clean 后的重建结果}{fig:q14-result}
+
+\subsubsection{问题分析与体会}
+
+Make 不是按照命令的“感觉”决定是否构建，而是严格按照目标文件与依赖文件的时间戳判断。依赖关系写漏时，首次构建可能仍然成功，但后续修改不会触发正确重建，因此“第一次能跑”不能证明 Makefile 正确。这个实验也解释了为什么构建系统要显式描述依赖图：只有依赖关系完整，增量构建才既快速又可靠。
+
+\subsection{实验十五：把本地 API 数据转换为可读报告}
+
+\subsubsection{实验目的}
+
+\begin{enumerate}[label=\arabic*.]
+    \item 使用 Python 标准库启动本地 HTTP 文件服务。
+    \item 使用 \texttt{curl -fsS} 按失败即退出、静默错误的方式获取 JSON。
+    \item 使用 \texttt{jq} 完成筛选、多条件排序与 Markdown 表格生成。
+    \item 将 API、命令行文本处理与报告写入组合成一个可重复脚本。
+\end{enumerate}
+
+\subsubsection{启动服务并获取数据}
+
+先把给定五条软件包记录保存为 \texttt{packages.json}，再在 Q15 目录执行：
+
+\begin{lstlisting}[language=bash]
+python -m http.server 8000
+curl -fsS http://127.0.0.1:8000/packages.json
+\end{lstlisting}
+
+服务终端显示多次 \texttt{GET /packages.json HTTP/1.1} 返回 200，说明 \texttt{curl} 与 \texttt{jq} 面对的是真实 HTTP 请求，而不是直接读取本地文件。本地文件方式虽然更简单，但无法验证 URL、HTTP 状态码和 \texttt{curl} 的失败传播行为。
+
+\expimage{../q15/q15-pro1.png}{Q15 启动本地 HTTP 服务并成功返回 packages.json}{fig:q15-server}
+
+\subsubsection{筛选、排序与报告脚本}
+
+用于筛选和排序的 \texttt{jq} 表达式为：
+
+\begin{lstlisting}[language=bash]
+.[] |
+select(.status == "active" and .downloads >= 100) |
+[.downloads, .name]
+\end{lstlisting}
+
+实际脚本把结果按 \texttt{downloads} 降序、\texttt{name} 升序排列，并转换成三列表格：
+
+\begin{lstlisting}[language=bash]
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="http://127.0.0.1:8000/packages.json"
+
+{
+  echo "# Package Report"
+  echo
+}
+curl -fsS "$url" |
+jq -r '
+  ["name", "version", "downloads"],
+  ([.[] |
+    select(.status == "active" and .downloads >= 100)] |
+    sort_by(-.downloads, .name) |
+    map([.name, .version, .downloads]))[] |
+  "| \(.name) | \(.version) | \(.downloads) |"
+' > summary.md
+
+echo "generated summary.md"
+\end{lstlisting}
+
+脚本使用 \texttt{set -euo pipefail}，因此 \texttt{curl} 的 HTTP 失败、\texttt{jq} 解析失败或后续命令失败都会使整个脚本返回非零状态，而不是继续写入不完整报告。
+
+\expimage{../q15/q15-pro2.png}{Q15 使用 curl 获取 JSON 并用 jq 验证筛选和排序表达式}{fig:q15-curl-jq}
+
+\expimage{../q15/q15-pro3.png}{Q15 api\_report.sh 内容与 summary.md 生成结果}{fig:q15-script}
+
+\subsubsection{实验结果}
+
+满足条件的数据共有三条，排序结果为：
+
+\begin{table}[H]
+    \centering
+    \caption{Q15 筛选与排序结果}
+    \begin{tabular}{lll}
+        \toprule
+        name & version & downloads \\
+        \midrule
+        delta & 0.9.0 & 450 \\
+        gamma & 1.5.1 & 450 \\
+        alpha & 1.2.0 & 120 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\texttt{beta} 因状态为 inactive 被过滤，\texttt{epsilon} 因下载量为 80 被过滤。delta 与 gamma 下载量相同，最终按照 name 升序，因此 delta 位于 gamma 之前。执行脚本后成功生成 \texttt{summary.md}。
+
+\expimage{../q15/q15-result.png}{Q15 最终执行 api\_report.sh 并生成排序后的 Markdown 报告}{fig:q15-result}
+
+\subsubsection{问题分析与体会}
+
+该实验的关键不只是“写出一个能运行的 \texttt{jq} 表达式”，而是同时保证 HTTP 获取可靠、排序规则明确、输出格式稳定。把 \texttt{curl} 的输出直接传给 \texttt{jq}，再由脚本重定向到 Markdown 文件，形成了清晰的数据流水线。\texttt{-fsS} 让 HTTP 错误不会被误当成正常 JSON，\texttt{pipefail} 则避免前半段失败却被后续命令掩盖。
+
+\subsection{实验十六：修复并交付一个陌生的小型工具仓库}
+
+\subsubsection{实验目的}
+
+\begin{enumerate}[label=\arabic*.]
+    \item 在真实仓库中定位测试、源码和检查脚本之间的关系。
+    \item 主动制造质量问题并确认测试能够捕获错误。
+    \item 修复实现后重新运行本地质量门禁。
+    \item 使用 Makefile 统一执行检查、构建和清理。
+    \item 计算 Wheel 的 SHA-256，并以聚焦提交交付改动。
+\end{enumerate}
+
+\subsubsection{检查源码和测试}
+
+Q16 复制 Q13 后先重新初始化 Git，并提交初始版本 \texttt{d76a88b}。随后查看测试与源码，确认两个测试分别验证空白姓名退出码和正常姓名输出。
+
+\begin{lstlisting}[language=Python]
+import sys
+import pytest
+from greetlab.cli import main
+
+
+def test_blank_name_exits_with_code_2(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["sdt-greet", "--name", "   "])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 2
+
+
+def test_normal_name_prints_greeting(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["sdt-greet", "--name", "Alice"])
+    main()
+    captured = capsys.readouterr()
+    assert captured.out == "Hello, Alice!\n"
+\end{lstlisting}
+
+对应实现会在打印问候语前检查姓名是否为空白：
+
+\begin{lstlisting}[language=Python]
+import argparse
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--name", required=True)
+    args = parser.parse_args()
+
+    if not args.name.strip():
+        parser.error("--name cannot be empty or whitespace")
+
+    print(f"Hello, {args.name}!")
+\end{lstlisting}
+
+\expimage{../q16/q16-pro1-git-init-and-check.png}{Q16 初始化仓库、执行 check.sh 并检查仓库状态}{fig:q16-init}
+
+\expimage{../q16/q16-pro2-view-tests-and-source.png}{Q16 查看测试文件和源码实现}{fig:q16-source}
+
+\subsubsection{故障复现与修复}
+
+为了验证测试不是“只会通过”，把问候语实现临时改成始终返回字面量 \texttt{Hello, name!}。再次执行 \texttt{check.sh} 后，正常姓名测试失败，证明测试确实检查了实际姓名插值，而不是只检查退出状态。
+
+恢复正确实现后，Ruff 格式检查与静态检查重新通过，pytest 显示 2 个测试全部通过。这里没有修改测试去迎合错误实现，而是修复源码并保留原有断言。
+
+\expimage{../q16/q16-pro3-trigger-quality-error.png}{Q16 故意修改问候语后 check.sh 捕获测试失败}{fig:q16-fail}
+
+\expimage{../q16/q16-pro4-fix-and-check.png}{Q16 修复问候语并重新运行检查与测试}{fig:q16-fix}
+
+\subsubsection{Makefile、构建与哈希}
+
+补充的 Makefile 包含 \texttt{check}、\texttt{build} 和 \texttt{clean}：
+
+\begin{lstlisting}[language=make]
+.PHONY: check build clean
+
+check:
+	./check.sh
+
+build:
+	python -m build
+
+clean:
+	rm -rf build dist *.egg-info
+\end{lstlisting}
+
+\texttt{make check} 最终显示 8 个文件已经格式化、Ruff 全部通过、2 个测试通过，并且 shell 退出码为 0。随后执行 \texttt{make build}，成功生成源码包和 \texttt{greetlab-\allowbreak 0.1.0-\allowbreak py3-none-any.whl}。
+
+\begin{lstlisting}[language=bash]
+$ make check
+8 files already formatted
+All checks passed!
+2 passed in 0.16s
+
+$ echo $?
+0
+
+$ make build
+Successfully built greetlab-0.1.0.tar.gz
+Successfully built greetlab-0.1.0-py3-none-any.whl
+\end{lstlisting}
+
+\expimage{../q16/q16-pro5-make-check-and-build.png}{Q16 make check 返回 0 并由 make build 生成 Wheel}{fig:q16-build}
+
+Wheel 生成后使用 SHA-256 记录构建产物。一次构建得到：
+
+\begin{lstlisting}[language=bash]
+$ sha256sum dist/*.whl
+d0afd1fee7d1db3d0a353845a03ed8b3a309be7ce6d63ba2e2490bf325928c70  dist/greetlab-0.1.0-py3-none-any.whl
+\end{lstlisting}
+
+清理后重新构建时哈希变为：
+
+\begin{lstlisting}[language=bash]
+$ sha256sum dist/*.whl
+33af7036156979f83bbaa36a6b9a23ad8a8c2c8fa929fda5d83dba72c126dd21  dist/greetlab-0.1.0-py3-none-any.whl
+\end{lstlisting}
+
+原因是普通 Python Wheel 内部可能记录构建时间，因而即使是同一份源代码也未必得到逐字节相同的归档。SHA-256 在这里用于固定并核对交付文件，而不是证明构建具有完全的二进制可复现性。
+
+\expimage{../q16/q16-pro6-hash-clean-and-check.png}{Q16 Wheel 哈希记录、Makefile 提交、clean 与重新检查}{fig:q16-hash}
+
+\expimage{../q16/q16-result.png}{Q16 最终重建、Wheel 哈希和工作区 clean 状态}{fig:q16-result}
+
+\subsubsection{实验结果与体会}
+
+最终提交包含检查和构建流程，提交编号包括初始提交 \texttt{d76a88b} 与后续构建流程提交 \texttt{9da5a0c}。\texttt{make clean} 后重新执行 \texttt{make check} 仍能通过，说明清理生成物不会破坏源码与测试。综合测试的核心不是“尽快修改一行代码”，而是完整经历故障复现、修复、验证、构建、哈希记录和提交这一条闭环。
+
+\section{课后练习}
+
+\section{课后练习一：配置格式化器、linter 与 pre-commit 钩子}
+
+练习创建了 \texttt{demo.py}、\texttt{.pre-commit-config.yaml} 和 Git 仓库。首先安装 pre-commit 钩子：
+
+\begin{lstlisting}[language=bash]
+pre-commit install
+pre-commit run --all-files
+\end{lstlisting}
+
+配置文件的最小形式为：
+
+\begin{lstlisting}[language=yaml]
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.10
+    hooks:
+      - id: ruff-format
+      - id: ruff
+\end{lstlisting}
+
+初始示例中保留了一个未使用变量：
+
+\begin{lstlisting}[language=Python]
+def calc(a, b):
+    x = a + b
+    return a + b
+
+
+def hello():
+    print("hello world")
+\end{lstlisting}
+
+\expimage{../practice/pra1.png}{课后练习一：创建 pre-commit 配置并检查格式与未使用变量}{fig:practice-precommit}
+
+\subsection{AI Agent 运行成果（无截图，正文留档）}
+
+给 AI agent 的约束如下：先运行 Ruff 并读取完整输出；只修复真实质量问题，不通过全局 ignore 掩盖错误；每完成一轮修改都必须再次运行检查；最后报告修改文件和验证命令。
+
+AI agent 的文本运行记录为：
+
+\begin{lstlisting}[language=bash]
+[AI agent] 读取到的关键错误：
+demo.py:3:5: F841 Local variable `x` is assigned to but never used
+
+[AI agent] 修复策略：手动删除没有参与返回值计算的 `x = a + b`，保留 `return a + b`。
+
+$ ruff check demo.py
+All checks passed!
+
+$ ruff format demo.py
+1 file reformatted
+
+$ pre-commit run --all-files
+ruff-format........................................................Passed
+ruff................................................................Passed
+
+$ git commit -m "test pre-commit"
+[INFO] Initializing environment for astral-sh/ruff-pre-commit.
+ruff-format........................................................Passed
+ruff................................................................Passed
+[master] test pre-commit
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+\end{lstlisting}
+
+这里的 AI 运行成果不是一段无法核验的自然语言说明，而是“错误定位、修改动作、重新运行、钩子放行”的闭环。人工检查重点是确认删除的变量确实是死代码，而不是让 AI 通过修改测试或关闭 Ruff 规则来制造假通过。
+
+\section{课后练习二：单元测试、覆盖率报告与 AI 辅助提升}
+
+练习为 \texttt{calc} 和 \texttt{hello} 编写测试，并运行：
+
+\begin{lstlisting}[language=bash]
+pytest test_demo.py --cov=demo --cov-report=html
+\end{lstlisting}
+
+\expimage{../practice/pra2.png}{课后练习二：编写单元测试并生成 HTML 覆盖率报告}{fig:practice-coverage}
+
+\subsection{AI Agent 运行成果（无截图，正文留档）}
+
+第一次覆盖率运行得到 83\%，详细报告中 \texttt{demo.py} 共 6 条语句，其中 1 条未覆盖。给 AI agent 的要求是：不能只看总百分比，必须先运行带逐行缺口的覆盖率命令，再根据 missing 行补充测试，最后重新运行 pytest 和覆盖率工具。
+
+AI agent 的关键运行结果如下：
+
+\begin{lstlisting}[language=bash]
+$ python -m pytest --cov=demo --cov-report=term-missing
+---------- coverage: platform linux, python 3.10.12 ----------
+Name      Stmts   Miss  Cover   Missing
+---------------------------------------
+demo.py       6      1    83%   8
+---------------------------------------
+TOTAL         6      1    83%
+2 passed in 0.15s
+
+[AI agent] 根据 Missing=8 定位到 `return a + b` 分支，
+新增正向数值测试，不修改生产代码。
+
+$ python -m pytest --cov=demo --cov-report=term-missing
+Name      Stmts   Miss  Cover   Missing
+---------------------------------------
+demo.py       6      0   100%
+---------------------------------------
+TOTAL         6      0   100%
+4 passed in 0.11s
+Coverage HTML written to dir htmlcov
+\end{lstlisting}
+
+AI 生成的测试是否有效，关键不在于它新增了多少行，而在于新增断言是否覆盖真实分支、是否符合输入边界，以及是否在没有修改业务代码的前提下提高覆盖率。该实验中，人工复核确认新增测试只是补充算术结果断言，没有通过 mock 或跳过逻辑虚增覆盖。
+
+\section{课后练习三：配置持续集成并在每次 push 时运行}
+
+练习脚本 \texttt{ci.sh} 按顺序执行格式检查、lint 和带覆盖率的测试：
+
+\begin{lstlisting}[language=bash]
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "ruff format check"
+.venv/bin/ruff format --check
+
+echo "ruff lint"
+.venv/bin/ruff check
+
+echo "run pytest with coverage"
+.venv/bin/python -m pytest --cov=demo
+\end{lstlisting}
+
+持续集成工作流的核心触发条件是每次 push：
+
+\begin{lstlisting}[language=yaml]
+name: CI
+on: [push, pull_request]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install -e ".[dev]"
+      - run: bash ci.sh
+\end{lstlisting}
+
+\expimage{../practice/pra3_01.png}{课后练习三：创建 CI 脚本并首次发现格式和 lint 问题}{fig:practice-ci-create}
+
+随后故意在代码中加入不良格式、lint 违规和会破坏导入的错误，重新运行脚本。CI 首先在格式检查阶段返回非零状态，阻止不合格代码继续进入后续步骤；修正前一阶段后，后续测试阶段又继续暴露 import 错误。整个流程能够准确拦截人为破坏。
+
+\expimage{../practice/pra3_02.png}{课后练习三：覆盖率为 83\% 并制造代码质量问题}{fig:practice-ci-break}
+
+\expimage{../practice/pra3_03.png}{课后练习三：CI 脚本在测试收集阶段捕获导入错误}{fig:practice-ci-fail}
+
+该实验说明 CI 的关键不是“额外运行一次命令”，而是把同一个可重复的质量脚本挂接到版本控制事件上。只要脚本使用非零退出码表达失败，CI 就能在合并前提供统一反馈。
+
+\section{课后练习四：使用 grep 与 semgrep 查找危险调用}
+
+先创建包含安全调用和危险调用的 Python 文件，再使用扩展正则查找：
+
+\begin{lstlisting}[language=bash]
+grep -RniE 'subprocess\.Popen\(.*shell=True' .
+\end{lstlisting}
+
+初始代码中的直接调用能够被匹配：
+
+\begin{lstlisting}[language=Python]
+import subprocess
+
+bad1 = subprocess.Popen("rm -rf /tmp/abc", shell=True)
+bad2 = subprocess.Popen(cmd, shell=True)
+\end{lstlisting}
+
+但当危险调用被拆行或通过变量拼接后，单行 \texttt{grep} 会失效。为了验证语义匹配能力，准备了以下变体：
+
+\begin{lstlisting}[language=Python]
+import subprocess
+
+subprocess.Popen(
+    "echo hello",
+    shell=True,
+)
+\end{lstlisting}
+
+对应尝试执行的 semgrep 规则与命令为：
+
+\begin{lstlisting}[language=yaml]
+rules:
+  - id: detect-popen-shell-true
+    pattern: subprocess.Popen($CMD, shell=True)
+    message: dangerous shell=True
+    languages: [python]
+    severity: ERROR
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash]
+.venv/bin/semgrep scan --config=shell-true.yml risk2.py
+\end{lstlisting}
+
+\expimage{../practice/pra4.png}{课后练习四：grep 匹配简单调用并准备 semgrep 规则}{fig:practice-grep}
+
+当前环境未安装 semgrep，终端返回 \texttt{No such file or directory}，因此本机没有完成语义扫描。理论上，semgrep 基于 AST 进行匹配，不受换行、空格和部分变量拼接形式影响，比纯文本正则更不容易被简单改写绕过；但该结论需要用成功运行的结果进一步验证。实践结论是不能直接把“grep 没匹配到”理解为“代码安全”。
+
+\section{课后练习五：使用正则查找替换 Markdown 项目符号}
+
+练习文件同时包含真正的 Markdown 项目符号、普通连字符和嵌套列表。使用如下正则只匹配“行首可含空白，随后是连字符和至少一个空白”的情况：
+
+\begin{lstlisting}[language=bash]
+sed -E 's/^([[:space:]]*)-[[:space:]]+/\1* /' test.md > out.md
+\end{lstlisting}
+
+替换前输入为：
+
+\begin{lstlisting}
+apple
+- banana
+this is dash not list
+  - nested item
+\end{lstlisting}
+
+替换后结果为：
+
+\begin{lstlisting}
+apple
+* banana
+this is dash not list
+  * nested item
+\end{lstlisting}
+
+\expimage{../practice/pra5.png}{课后练习五：用行首锚点和空白约束替换 Markdown 项目符号}{fig:practice-sed}
+
+如果直接全局替换所有 \texttt{-} 字符，会同时破坏普通文本中的连字符、负数和水平分隔线。正则中的 \texttt{\^{}}、字符类 \texttt{[[:space:]]} 和 \texttt{+} 分别限制了位置、缩进和分隔空白，因此只修改项目符号语法。执行替换前应先用标准输出预览，再重定向到新文件，避免覆盖原文件。
+
+\section{课后练习六：从 JSON 中捕获 name 并改用 JSON 解析器}
+
+基础样例为：
+
+\begin{lstlisting}
+{"name": "Alyssa P. Hacker", "college": "MIT"}
+\end{lstlisting}
+
+贪婪正则 \texttt{"name"\textbackslash{}s*:\textbackslash{}s*"(.*)"} 会一直匹配到末尾，并把 \texttt{"college": "MIT"} 一起吞入分组。将量词改为非贪婪形式后可以止于 name 字段末尾：
+
+\begin{lstlisting}[language=Python]
+import re
+
+s = '{"name": "Alyssa P. Hacker", "college": "MIT"}'
+pattern = r'"name"\s*:\s*"(.*?)"'
+print(re.search(pattern, s).group(1))
+\end{lstlisting}
+
+输出为：
+
+\begin{lstlisting}
+Alyssa P. Hacker
+\end{lstlisting}
+
+当姓名包含 JSON 转义双引号时，正则会失效或捕获错误内容。允许转义字符的表达式可写成：
+
+\begin{lstlisting}[language=Python]
+pattern = r'"name"\s*:\s*"((?:\\.|[^"\\])*)"'
+\end{lstlisting}
+
+即便如此，正则仍需要自行处理 JSON 字符串、Unicode、转义和嵌套结构，正确做法是使用标准 JSON 解析器：
+
+\begin{lstlisting}[language=Python]
+import json
+import sys
+
+data = json.load(sys.stdin)
+print(data["name"])
+\end{lstlisting}
+
+命令行中可以简化为：
+
+\begin{lstlisting}[language=bash]
+python -c 'import json,sys; print(json.load(sys.stdin)["name"])'
+\end{lstlisting}
+
+\expimage{../practice/pra6.png}{课后练习六：对比贪婪与非贪婪正则并验证 JSON 解析器方案}{fig:practice-json}
+
+对于两个输入样例，解析器分别输出 \texttt{Alyssa P. Hacker} 和 \texttt{Alyssa "Hacker"}，不受字段顺序、空格和转义规则影响。这说明结构化数据应优先交给结构化解析器，正则更适合约束清晰、格式简单的文本片段。
+
+\section{Git 仓库与提交记录}
+
+本周课堂实验按照 Q13、Q14、Q15 和 Q16 分目录组织。Q13 的提交记录了质量配置、测试用例和检查脚本三个阶段；Q14 使用 \texttt{1f95941} 提交增量构建流水线；Q16 则包含初始版本、故障修复以及 Makefile 和哈希文件的聚焦提交。相关证据分别见 \ref{fig:q13-git}、\ref{fig:q14-git}、\ref{fig:q16-hash} 和 \ref{fig:q16-result}。
+
+\begin{table}[H]
+    \centering
+    \caption{本周主要 Git 提交记录}
+    \begin{tabular}{lll}
+        \toprule
+        实验 & 提交编号 & 内容 \\
+        \midrule
+        Q13 & 07cc159 & 添加 pytest 与 Ruff 配置 \\
+        Q13 & ecbf6c4 & 添加正常与空白姓名测试 \\
+        Q13 & d2bc8d3 & 添加质量检查脚本 \\
+        Q14 & 1f95941 & 添加 Make 构建流水线 \\
+        Q16 & d76a88b & 初始化 Q16 项目 \\
+        Q16 & 9da5a0c & 添加检查与构建流程 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{实验总结}
+
+第四周实验把代码质量、构建系统和交付流程连接成一个完整闭环。Q13 通过 Ruff、pytest 和 \texttt{check.sh} 建立本地质量门禁；Q14 用 Makefile 显式描述源文件、中间文件和最终产物之间的依赖，验证增量构建与清理规则；Q15 使用 HTTP、\texttt{curl} 和 \texttt{jq} 把 API 数据转换为结构化 Markdown；Q16 在失败测试、修复、构建、哈希和 Git 提交之间完成一次可审计交付。
+
+课后练习进一步补充了 pre-commit、覆盖率和持续集成。格式化器负责消除无关格式差异，linter 负责发现静态问题，测试负责验证行为，覆盖率报告负责指出未执行语句，CI 则把这些检查绑定到每次 push。AI agent 可以快速完成“运行工具、读取错误、修改代码、再次运行”的迭代循环，但必须向它提供真实工具结果和明确约束，并由人检查 diff。AI 生成测试也可能只追求覆盖率数字，因此要确认断言是否验证了真实业务行为。
+
+正则部分展示了文本工具的边界。\texttt{grep} 适合快速搜索已知文本模式，\texttt{semgrep} 的 AST 匹配更能抵御换行和格式变化，但工具未安装时不能凭预期代替真实结果。Markdown 项目符号替换说明正则必须同时约束位置和上下文；JSON 姓名提取则更清楚地表明，复杂结构化数据应使用 JSON 解析器而不是不断堆叠正则。
+
+综合来看，本周最重要的工程习惯是“所有结论都要有命令、输出和退出码支撑”。代码能运行、测试通过、构建成功和产物可追溯分别代表不同层次的验证，不能相互替代。以后在科研和项目开发中，我会优先把质量检查、测试、构建和 CI 固定为可重复命令，再借助 AI 加速迭代，同时保留人工审查和最终验证环节。
+
+\end{document}
